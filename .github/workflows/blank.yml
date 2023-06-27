@@ -1,36 +1,67 @@
-# This is a basic workflow to help you get started with Actions
+name: Get PR Files
 
-name: CI
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
+    types:
+      - synchronize
+      - opened
+      - reopened
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  get_files:
     runs-on: ubuntu-latest
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v2
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
-        run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+      - name: Tag Critical PRs
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.TOKEN }}
+          script: |
+            const criticalFilePathEndsWith = [
+              "common/models.py",
+              "swiggy.py",
+              "zomato.py",
+              "talabat.py",
+            ];
+            const prNumber = context.payload.pull_request.number;
+            const resp = await github.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/files', {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            let files = resp.data;
+            files = files.filter((file) => {
+              return criticalFilePathEndsWith.some((filepath) => {
+                return file.filename.endsWith(filepath);
+              });
+            });
+            const labels = await github.request('GET /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+            const isCriticalLabelExists = labels.data.some((label) => {
+              return label.name === 'critical';
+            });
+            if (files.length > 0) {
+              if (!isCriticalLabelExists) {
+                  await github.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: prNumber,
+                    labels: ['critical']
+                  });
+              }
+            } else {
+              if (isCriticalLabelExists) {
+                  await github.request('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: prNumber,
+                    name: 'critical'
+                  });
+              }
+            }
